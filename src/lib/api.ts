@@ -83,7 +83,7 @@ export async function getBlock(id: string) {
     const header = block.header || block;
     
     return {
-      number: header.height ?? parseInt(id) || 0,
+      number: header.height ?? (parseInt(id) || 0),
       hash: header.hash || '',
       parentHash: header.parent_hash || '',
       timestamp: header.timestamp ? new Date(header.timestamp * 1000).toISOString() : new Date().toISOString(),

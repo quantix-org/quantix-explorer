@@ -37,7 +37,7 @@ export default function BlockPage() {
       <div className="container-page py-8">
         <div className="card p-12 text-center">
           <h2 className="text-xl font-bold mb-2">Block Not Found</h2>
-          <p className="text-dark-400">The block you're looking for doesn't exist.</p>
+          <p className="text-dark-400">The block you are looking for does not exist.</p>
         </div>
       </div>
     );
