@@ -14,7 +14,7 @@ export async function getStats() {
     const info = await fetchAPI('/chain/info');
     return {
       blockHeight: info.height || 0,
-      totalTxs: (info.height || 0) * 10, // estimate
+      totalTxs: (info.height || 0) * 10, // estimate based on blocks
       validators: info.validators || 0,
       totalStaked: info.total_supply_nqtx || '0',
       avgBlockTime: 10,
@@ -26,7 +26,7 @@ export async function getStats() {
       totalTxs: 0,
       validators: 0,
       totalStaked: '0',
-      avgBlockTime: 10,
+      avgBlockTime: 0,
       tps: 0,
     };
   }
@@ -66,7 +66,7 @@ export async function getBlocks(limit = 10, offset = 0) {
     }
     return blocks;
   } catch {
-    return mockBlocks(limit, offset);
+    return [];
   }
 }
 
@@ -102,7 +102,7 @@ export async function getBlock(id: string) {
 export async function getTransactions(limit = 10, offset = 0) {
   try {
     const mempool = await fetchAPI('/mempool');
-    const txs = (mempool.pending_txs || []).slice(offset, offset + limit).map((tx: any, i: number) => ({
+    const txs = (mempool.pending_txs || []).slice(offset, offset + limit).map((tx: any) => ({
       hash: tx.id || tx.hash || '',
       blockNumber: 0, // pending
       from: tx.sender || '',
@@ -114,9 +114,9 @@ export async function getTransactions(limit = 10, offset = 0) {
       status: 'pending',
       timestamp: tx.timestamp ? new Date(tx.timestamp * 1000).toISOString() : new Date().toISOString(),
     }));
-    return txs.length > 0 ? txs : mockTransactions(limit, offset);
+    return txs;
   } catch {
-    return mockTransactions(limit, offset);
+    return [];
   }
 }
 
@@ -180,49 +180,8 @@ export async function getAddressTransactions(address: string, limit = 25) {
       status: tx.status || 'success',
       timestamp: tx.timestamp ? new Date(tx.timestamp * 1000).toISOString() : new Date().toISOString(),
     }));
-    return txs.length > 0 ? txs : mockTransactions(limit, 0);
+    return txs;
   } catch {
-    return mockTransactions(limit, 0);
+    return [];
   }
-}
-
-// Mock data fallbacks
-function mockBlocks(limit: number, offset: number) {
-  const blocks = [];
-  for (let i = 0; i < limit; i++) {
-    const num = 100 - offset - i;
-    if (num < 0) break;
-    blocks.push({
-      number: num,
-      hash: `0x${num.toString(16).padStart(64, '0')}`,
-      parentHash: `0x${(num - 1).toString(16).padStart(64, '0')}`,
-      timestamp: new Date(Date.now() - i * 10000).toISOString(),
-      validator: `qtx1validator${(num % 50).toString().padStart(32, '0')}`,
-      txCount: num % 50,
-      gasUsed: 1000000 + (num % 5000000),
-      gasLimit: 10000000,
-      stateRoot: `0x${num.toString(16).padStart(64, 'a')}`,
-    });
-  }
-  return blocks;
-}
-
-function mockTransactions(limit: number, offset: number) {
-  const txs = [];
-  for (let i = 0; i < limit; i++) {
-    const n = offset + i;
-    txs.push({
-      hash: `0x${(Date.now() + n).toString(16).padStart(64, 'a')}`,
-      blockNumber: 100 - n,
-      from: `qtx1sender${n.toString().padStart(33, '0')}`,
-      to: `qtx1receiver${n.toString().padStart(31, '0')}`,
-      value: ((n + 1) * 1e18).toString(),
-      fee: '21000000000000',
-      gasUsed: 21000,
-      nonce: n,
-      status: 'success',
-      timestamp: new Date(Date.now() - n * 15000).toISOString(),
-    });
-  }
-  return txs;
 }
