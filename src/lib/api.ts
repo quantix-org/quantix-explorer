@@ -1,41 +1,33 @@
 const RPC_URL = process.env.NEXT_PUBLIC_RPC_URL || 'https://rpc.qpqb.org';
 
-async function rpc(method: string, params: any[] = []) {
-  const res = await fetch(RPC_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', method, params, id: 1 }),
+async function fetchAPI(endpoint: string) {
+  const res = await fetch(`${RPC_URL}${endpoint}`, {
     next: { revalidate: 10 },
   });
-  const data = await res.json();
-  if (data.error) throw new Error(data.error.message);
-  return data.result;
-}
-
-function hex(val: string): number {
-  return parseInt(val, 16);
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
 }
 
 // Stats
 export async function getStats() {
   try {
-    const blockNum = await rpc('qtx_blockNumber');
+    const info = await fetchAPI('/chain/info');
     return {
-      blockHeight: hex(blockNum),
-      totalTxs: hex(blockNum) * 15,
-      validators: 50,
-      totalStaked: '1600000000000000000000',
+      blockHeight: info.height || 0,
+      totalTxs: (info.height || 0) * 10, // estimate
+      validators: info.validators || 0,
+      totalStaked: info.total_supply_nqtx || '0',
       avgBlockTime: 10,
-      tps: 15,
+      tps: info.tps || 0,
     };
   } catch {
     return {
-      blockHeight: 100000,
-      totalTxs: 1500000,
-      validators: 50,
-      totalStaked: '1600000000000000000000',
+      blockHeight: 0,
+      totalTxs: 0,
+      validators: 0,
+      totalStaked: '0',
       avgBlockTime: 10,
-      tps: 15,
+      tps: 0,
     };
   }
 }
@@ -43,24 +35,33 @@ export async function getStats() {
 // Blocks
 export async function getBlocks(limit = 10, offset = 0) {
   try {
-    const latest = hex(await rpc('qtx_blockNumber'));
+    const info = await fetchAPI('/chain/info');
+    const latest = info.height || 0;
     const blocks = [];
+    
     for (let i = 0; i < limit; i++) {
       const num = latest - offset - i;
-      if (num <= 0) break;
-      const block = await rpc('qtx_getBlockByNumber', [`0x${num.toString(16)}`, false]);
-      if (block) {
-        blocks.push({
-          number: hex(block.number),
-          hash: block.hash,
-          parentHash: block.parentHash,
-          timestamp: new Date(hex(block.timestamp) * 1000).toISOString(),
-          validator: block.miner,
-          txCount: block.transactions?.length || 0,
-          gasUsed: hex(block.gasUsed),
-          gasLimit: hex(block.gasLimit),
-          stateRoot: block.stateRoot,
-        });
+      if (num < 0) break;
+      
+      try {
+        const data = await fetchAPI(`/block/height/${num}`);
+        if (data.header || data.block) {
+          const block = data.block || data;
+          const header = block.header || block;
+          blocks.push({
+            number: header.height ?? num,
+            hash: header.hash || '',
+            parentHash: header.parent_hash || '',
+            timestamp: header.timestamp ? new Date(header.timestamp * 1000).toISOString() : new Date().toISOString(),
+            validator: header.miner || header.proposer_id || '',
+            txCount: block.body?.txs_list?.length || header.tx_count || 0,
+            gasUsed: header.gas_used || 0,
+            gasLimit: header.gas_limit || 0,
+            stateRoot: header.state_root || '',
+          });
+        }
+      } catch (e) {
+        // Skip blocks that can't be fetched
       }
     }
     return blocks;
@@ -71,73 +72,93 @@ export async function getBlocks(limit = 10, offset = 0) {
 
 export async function getBlock(id: string) {
   try {
+    // Try by height first if it's a number
     const isNum = /^\d+$/.test(id);
-    const method = isNum ? 'qtx_getBlockByNumber' : 'qtx_getBlockByHash';
-    const param = isNum ? `0x${parseInt(id).toString(16)}` : id;
-    const block = await rpc(method, [param, true]);
-    if (!block) return null;
+    const endpoint = isNum ? `/block/height/${id}` : `/block/${id}`;
+    const data = await fetchAPI(endpoint);
+    
+    if (!data || data.error) return null;
+    
+    const block = data.block || data;
+    const header = block.header || block;
+    
     return {
-      number: hex(block.number),
-      hash: block.hash,
-      parentHash: block.parentHash,
-      timestamp: new Date(hex(block.timestamp) * 1000).toISOString(),
-      validator: block.miner,
-      txCount: block.transactions?.length || 0,
-      gasUsed: hex(block.gasUsed),
-      gasLimit: hex(block.gasLimit),
-      stateRoot: block.stateRoot,
+      number: header.height ?? parseInt(id) || 0,
+      hash: header.hash || '',
+      parentHash: header.parent_hash || '',
+      timestamp: header.timestamp ? new Date(header.timestamp * 1000).toISOString() : new Date().toISOString(),
+      validator: header.miner || header.proposer_id || '',
+      txCount: block.body?.txs_list?.length || header.tx_count || 0,
+      gasUsed: header.gas_used || 0,
+      gasLimit: header.gas_limit || 0,
+      stateRoot: header.state_root || '',
     };
   } catch {
-    const num = parseInt(id) || 100000;
-    return mockBlocks(1, 100000 - num)[0];
+    return null;
   }
 }
 
 // Transactions
 export async function getTransactions(limit = 10, offset = 0) {
-  return mockTransactions(limit, offset);
+  try {
+    const mempool = await fetchAPI('/mempool');
+    const txs = (mempool.pending_txs || []).slice(offset, offset + limit).map((tx: any, i: number) => ({
+      hash: tx.id || tx.hash || '',
+      blockNumber: 0, // pending
+      from: tx.sender || '',
+      to: tx.receiver || '',
+      value: tx.amount?.toString() || '0',
+      fee: '21000000000000',
+      gasUsed: tx.gas_limit || 21000,
+      nonce: tx.nonce || 0,
+      status: 'pending',
+      timestamp: tx.timestamp ? new Date(tx.timestamp * 1000).toISOString() : new Date().toISOString(),
+    }));
+    return txs.length > 0 ? txs : mockTransactions(limit, offset);
+  } catch {
+    return mockTransactions(limit, offset);
+  }
 }
 
 export async function getTransaction(hash: string) {
   try {
-    const tx = await rpc('qtx_getTransactionByHash', [hash]);
-    const receipt = await rpc('qtx_getTransactionReceipt', [hash]);
-    if (!tx) return null;
+    const data = await fetchAPI(`/transaction/${hash}`);
+    if (!data || data.error) return null;
+    
+    const tx = data.transaction || data;
     return {
-      hash: tx.hash,
-      blockNumber: hex(tx.blockNumber),
-      from: tx.from,
-      to: tx.to,
-      value: BigInt(tx.value).toString(),
-      fee: (BigInt(receipt?.gasUsed || tx.gas) * BigInt(tx.gasPrice)).toString(),
-      gasUsed: hex(receipt?.gasUsed || tx.gas),
-      nonce: hex(tx.nonce),
-      status: receipt?.status === '0x1' ? 'success' : 'failed',
-      timestamp: new Date().toISOString(),
+      hash: tx.id || tx.hash || hash,
+      blockNumber: tx.block_number || 0,
+      from: tx.sender || '',
+      to: tx.receiver || '',
+      value: tx.amount?.toString() || '0',
+      fee: '21000000000000',
+      gasUsed: tx.gas_limit || 21000,
+      nonce: tx.nonce || 0,
+      status: tx.status || 'success',
+      timestamp: tx.timestamp ? new Date(tx.timestamp * 1000).toISOString() : new Date().toISOString(),
     };
   } catch {
-    return mockTransactions(1, 0)[0];
+    return null;
   }
 }
 
 // Address
 export async function getAddress(address: string) {
   try {
-    const balance = await rpc('qtx_getBalance', [address, 'latest']);
-    const nonce = await rpc('qtx_getTransactionCount', [address, 'latest']);
-    const code = await rpc('qtx_getCode', [address, 'latest']);
+    const data = await fetchAPI(`/balance/${address}`);
     return {
       address,
-      balance: BigInt(balance).toString(),
-      txCount: hex(nonce),
-      isContract: code && code !== '0x',
+      balance: data.balance_nqtx || '0',
+      txCount: data.nonce || 0,
+      isContract: false,
       isValidator: address.includes('validator'),
     };
   } catch {
     return {
       address,
-      balance: '5000000000000000000000',
-      txCount: 100,
+      balance: '0',
+      txCount: 0,
       isContract: false,
       isValidator: false,
     };
@@ -145,14 +166,32 @@ export async function getAddress(address: string) {
 }
 
 export async function getAddressTransactions(address: string, limit = 25) {
-  return mockTransactions(limit, 0);
+  try {
+    const data = await fetchAPI(`/accounts/${address}/txs`);
+    const txs = (data.transactions || []).slice(0, limit).map((tx: any) => ({
+      hash: tx.id || tx.hash || '',
+      blockNumber: tx.block_number || 0,
+      from: tx.sender || '',
+      to: tx.receiver || '',
+      value: tx.amount?.toString() || '0',
+      fee: '21000000000000',
+      gasUsed: tx.gas_limit || 21000,
+      nonce: tx.nonce || 0,
+      status: tx.status || 'success',
+      timestamp: tx.timestamp ? new Date(tx.timestamp * 1000).toISOString() : new Date().toISOString(),
+    }));
+    return txs.length > 0 ? txs : mockTransactions(limit, 0);
+  } catch {
+    return mockTransactions(limit, 0);
+  }
 }
 
-// Mock data
+// Mock data fallbacks
 function mockBlocks(limit: number, offset: number) {
   const blocks = [];
   for (let i = 0; i < limit; i++) {
-    const num = 100000 - offset - i;
+    const num = 100 - offset - i;
+    if (num < 0) break;
     blocks.push({
       number: num,
       hash: `0x${num.toString(16).padStart(64, '0')}`,
@@ -174,7 +213,7 @@ function mockTransactions(limit: number, offset: number) {
     const n = offset + i;
     txs.push({
       hash: `0x${(Date.now() + n).toString(16).padStart(64, 'a')}`,
-      blockNumber: 100000 - n,
+      blockNumber: 100 - n,
       from: `qtx1sender${n.toString().padStart(33, '0')}`,
       to: `qtx1receiver${n.toString().padStart(31, '0')}`,
       value: ((n + 1) * 1e18).toString(),
